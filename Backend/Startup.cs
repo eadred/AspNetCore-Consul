@@ -42,12 +42,21 @@ namespace Backend
             var logger = loggerFactory.CreateLogger("Consul");
             try
             {
-                logger.LogTrace("Registering service with Consul");
+                logger.LogInformation("Registering service with Consul");
                 var addresses = app.ServerFeatures.Get<IServerAddressesFeature>();
-                int port = new Uri(addresses.Addresses.Single()).Port;
+                var serviceUri = new Uri(addresses.Addresses.Single());
+                logger.LogInformation($"Service URI is {serviceUri.ToString()}");
                 using (var c = new Consul.ConsulClient())
                 {
-                    await c.KV.Put(new Consul.KVPair("backend_port") { Value = System.Text.Encoding.UTF8.GetBytes(port.ToString()) });
+                    var writeResult = await c.Agent.ServiceRegister(
+                        new Consul.AgentServiceRegistration()
+                        {
+                            Name = "backend",
+                            Port = serviceUri.Port,
+                            Address = Environment.MachineName
+                        });
+
+                    logger.LogInformation($"Completed registration with Consul with response code {writeResult.StatusCode.ToString()}");
                 }
             }
             catch (Exception ex)

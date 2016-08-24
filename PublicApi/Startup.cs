@@ -30,34 +30,66 @@ namespace PublicApi
 
             app.Run(async (context) =>
             {
-                var logger = loggerFactory.CreateLogger("Consul");
+                var logger = loggerFactory.CreateLogger("RequestHandling");
+
+                logger.LogInformation("Handling request");
+
                 string backendPort = null;
+                string backendHost = null;
                 try
                 {
                     using (var c = new Consul.ConsulClient())
                     {
-                        var result = await c.KV.Get("backend_port");
-                        backendPort = System.Text.Encoding.UTF8.GetString(result.Response.Value);
+                        var result = await c.Agent.Services();
+
+                        if (result.StatusCode == System.Net.HttpStatusCode.OK)
+                        {
+                            var agentService = result.Response["backend"];
+                            backendPort = agentService.Port.ToString();
+                            backendHost = agentService.Address;
+                            logger.LogInformation($"Found host {backendHost} and port {backendPort} for backend");
+                        }
+                        else
+                        {
+                            await WriteFailure(context, logger, $"Failed to get OK response from Consul: {result.StatusCode.ToString()}");
+                            return;
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    logger.LogError($"Failed to get service port from Consul: {ex.ToString()}");
-                    context.Response.StatusCode = 500;
-                    await context.Response.WriteAsync(ex.ToString());
+                    await WriteFailure(context, logger, $"Failed to get host and port from Consul: {ex.ToString()}");
                     return;
                 }
                 
                 using (var c = new System.Net.Http.HttpClient())
                 {
-                    c.BaseAddress = new Uri($"http://localhost:{backendPort}");
-                    string serviceResponse = await c.GetStringAsync("");
+                    if (backendHost == Environment.MachineName) backendHost = "localhost";
+                    c.BaseAddress = new Uri($"http://{backendHost}:{backendPort}");
 
-                    await context.Response.WriteAsync($"Hello {serviceResponse}!");
-                }
+                    logger.LogInformation($"Calling backend at {c.BaseAddress}");
 
-                   
+                    try
+                    {
+                        string serviceResponse = await c.GetStringAsync("");
+
+                        logger.LogInformation($"Backend call completed with '{serviceResponse}'");
+
+                        await context.Response.WriteAsync($"Hello {serviceResponse}!");
+                    }
+                    catch (Exception ex)
+                    {
+                        await WriteFailure(context, logger, $"Failed to call backend: {ex.ToString()}");
+                    }
+                }      
             });
+        }
+
+        private async Task WriteFailure(HttpContext context, ILogger logger, string message)
+        {
+            logger.LogError(message);
+            context.Response.StatusCode = (int)System.Net.HttpStatusCode.InternalServerError;
+            await context.Response.WriteAsync(message);
         }
     }
 }
