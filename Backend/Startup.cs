@@ -43,6 +43,8 @@ namespace Backend
             try
             {
                 logger.LogInformation("Registering service with Consul");
+                logger.LogInformation($"MachineName is {System.Environment.MachineName}");
+
                 var addresses = app.ServerFeatures.Get<IServerAddressesFeature>();
                 var serviceUri = new Uri(addresses.Addresses.Single());
                 logger.LogInformation($"Service URI is {serviceUri.ToString()}");
@@ -63,7 +65,7 @@ namespace Backend
             {
                 logger.LogError($"Error registering service with Consul: {ex.ToString()}");
             }
-            
+
         }
     }
 }
