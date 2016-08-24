@@ -13,6 +13,8 @@ namespace Backend
 {
     public class Startup
     {
+        private const string HealthPath = "/health";
+
         // This method gets called by the runtime. Use this method to add services to the container.
         // For more information on how to configure your application, visit https://go.microsoft.com/fwlink/?LinkID=398940
         public void ConfigureServices(IServiceCollection services)
@@ -31,6 +33,16 @@ namespace Backend
                 app.UseDeveloperExceptionPage();
             }
 
+            app.Map(HealthPath, app2 =>
+            {
+                var logger = loggerFactory.CreateLogger("Health");
+                app2.Run(async (context) =>
+                {
+                    logger.LogInformation("Health check performed");
+                    await context.Response.WriteAsync("I'm alive");
+                });
+            });
+
             app.Run(async (context) =>
             {
                 await context.Response.WriteAsync("Fred");
@@ -43,11 +55,14 @@ namespace Backend
             try
             {
                 logger.LogInformation("Registering service with Consul");
-                logger.LogInformation($"MachineName is {System.Environment.MachineName}");
+                logger.LogInformation($"MachineName is {Environment.MachineName}");
 
                 var addresses = app.ServerFeatures.Get<IServerAddressesFeature>();
                 var serviceUri = new Uri(addresses.Addresses.Single());
                 logger.LogInformation($"Service URI is {serviceUri.ToString()}");
+
+                var checkAddress = $"{serviceUri.Scheme}://localhost:{serviceUri.Port.ToString()}{HealthPath}";
+
                 using (var c = new Consul.ConsulClient())
                 {
                     var writeResult = await c.Agent.ServiceRegister(
@@ -55,7 +70,12 @@ namespace Backend
                         {
                             Name = "backend",
                             Port = serviceUri.Port,
-                            Address = Environment.MachineName
+                            Address = Environment.MachineName,
+                            Check = new Consul.AgentServiceCheck
+                            {
+                                HTTP = checkAddress,
+                                Interval = TimeSpan.FromSeconds(2.0)
+                            }
                         });
 
                     logger.LogInformation($"Completed registration with Consul with response code {writeResult.StatusCode.ToString()}");
