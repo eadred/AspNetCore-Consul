@@ -30,9 +30,27 @@ namespace PublicApi
 
             app.Run(async (context) =>
             {
+                var logger = loggerFactory.CreateLogger("Consul");
+                string backendPort = null;
+                try
+                {
+                    using (var c = new Consul.ConsulClient())
+                    {
+                        var result = await c.KV.Get("backend_port");
+                        backendPort = System.Text.Encoding.UTF8.GetString(result.Response.Value);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError($"Failed to get service port from Consul: {ex.ToString()}");
+                    context.Response.StatusCode = 500;
+                    await context.Response.WriteAsync(ex.ToString());
+                    return;
+                }
+                
                 using (var c = new System.Net.Http.HttpClient())
                 {
-                    c.BaseAddress = new Uri("http://localhost:5100");
+                    c.BaseAddress = new Uri($"http://localhost:{backendPort}");
                     string serviceResponse = await c.GetStringAsync("");
 
                     await context.Response.WriteAsync($"Hello {serviceResponse}!");

@@ -12,7 +12,8 @@
     "Microsoft.Extensions.Configuration.FileExtensions": "1.0.0",
     "Microsoft.Extensions.Configuration.Json": "1.0.0",
     "Microsoft.Extensions.Configuration.CommandLine": "1.0.0",
-    "System.Net.Http": "4.1.0"
+    "System.Net.Http": "4.1.0",
+    "Consul":  "0.7.0-rc1"
   },
 
   "tools": {
