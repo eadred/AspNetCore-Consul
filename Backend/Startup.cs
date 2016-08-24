@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Primitives;
 
 namespace Backend
 {
@@ -33,6 +34,16 @@ namespace Backend
                 app.UseDeveloperExceptionPage();
             }
 
+            //Specify content type, because why not!
+            app.Use(async (context, next) =>
+            {
+                context.Response.Headers.Add(
+                    "Content-Type",
+                    "text/plain");
+                await next();
+            });
+
+            //Routing for Consul checks
             app.Map(HealthPath, app2 =>
             {
                 var logger = loggerFactory.CreateLogger("Health");
