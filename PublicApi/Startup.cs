@@ -38,7 +38,10 @@ namespace PublicApi
                 string backendHost = null;
                 try
                 {
-                    using (var c = new Consul.ConsulClient())
+                    string consulHost = Environment.GetEnvironmentVariable("CONSUL_HOST") ?? "localhost";
+                    logger.LogInformation($"Consul host is {consulHost}");
+
+                    using (var c = new Consul.ConsulClient(cnfg => cnfg.Address = new Uri($"http://{consulHost}:8500")))
                     {
                         var result = await c.Agent.Services();
 

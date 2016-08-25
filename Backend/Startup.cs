@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
+using System.Net;
 
 namespace Backend
 {
@@ -66,22 +67,30 @@ namespace Backend
             try
             {
                 logger.LogInformation("Registering service with Consul");
-                logger.LogInformation($"MachineName is {Environment.MachineName}");
+
+                //Get the first IPv4 address
+                var addrs = await Dns.GetHostAddressesAsync(Dns.GetHostName());
+                string containerIp = addrs.Where(addr => addr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork).First().ToString();
+                logger.LogInformation($"Host IP is {containerIp}");
 
                 var addresses = app.ServerFeatures.Get<IServerAddressesFeature>();
                 var serviceUri = new Uri(addresses.Addresses.Single());
                 logger.LogInformation($"Service URI is {serviceUri.ToString()}");
 
-                var checkAddress = $"{serviceUri.Scheme}://localhost:{serviceUri.Port.ToString()}{HealthPath}";
+                var checkAddress = $"{serviceUri.Scheme}://{containerIp}:{serviceUri.Port.ToString()}{HealthPath}";
+                logger.LogInformation($"Health check address is {checkAddress}");
 
-                using (var c = new Consul.ConsulClient())
+                string consulHost = Environment.GetEnvironmentVariable("CONSUL_HOST") ?? "localhost";
+                logger.LogInformation($"Consul host is {consulHost}");
+
+                using (var c = new Consul.ConsulClient(cnfg => cnfg.Address = new Uri($"http://{consulHost}:8500")))
                 {
                     var writeResult = await c.Agent.ServiceRegister(
                         new Consul.AgentServiceRegistration()
                         {
                             Name = "backend",
                             Port = serviceUri.Port,
-                            Address = Environment.MachineName,
+                            Address = containerIp,
                             Check = new Consul.AgentServiceCheck
                             {
                                 HTTP = checkAddress,
