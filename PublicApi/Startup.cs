@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Consul;
 
 namespace PublicApi
 {
@@ -28,103 +30,135 @@ namespace PublicApi
                 app.UseDeveloperExceptionPage();
             }
 
-            app.Run(async (context) =>
+            var logger = loggerFactory.CreateLogger("RequestHandling");
+
+            app.Run(context => HandleRequest(context, logger));
+        }
+
+        private async Task HandleRequest(HttpContext context, ILogger logger)
+        {
+            logger.LogInformation("Handling request");
+
+            var serviceResponse = await GetNameFromBackend(logger);
+
+            await context.Response.WriteAsync($"Hello {serviceResponse ?? "whoever you are"}!");
+
+            logger.LogInformation("Request handling complete");
+        }
+
+        private async Task<string> GetNameFromBackend(ILogger logger)
+        {
+            string serviceName = "backend";
+            string consulHost = Environment.GetEnvironmentVariable("CONSUL_HOST") ?? "localhost";
+            logger.LogInformation($"Consul host is {consulHost}");
+
+            Uri backendServiceUri = null;
+
+            try
             {
-                var logger = loggerFactory.CreateLogger("RequestHandling");
+                using (var c = new ConsulClient(cnfg => cnfg.Address = new Uri($"http://{consulHost}:8500")))
+                {
+                    if (!await IsServiceHealthy(serviceName, c, logger)) return null;
 
-                logger.LogInformation("Handling request");
+                    backendServiceUri = await GetServiceUri(serviceName, c, logger);  
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError($"Failed to get host and port from Consul: {ex.ToString()}");
+                return null;
+            }
 
-                string backendPort = null;
-                string backendHost = null;
+            if (backendServiceUri == null) return null;
+
+            return await CallBackend(backendServiceUri, logger);
+        }
+
+        private async Task<bool> IsServiceHealthy(string serviceName, ConsulClient client, ILogger logger)
+        {
+            var healthResult = await client.Health.Service(serviceName);
+
+            return ProcessQueryResult(
+                healthResult,
+                logger,
+                serviceEntry =>
+                {
+                    if (serviceEntry.Checks.Any(chk => string.Compare(chk.Status, "critical", true) == 0))
+                    {
+                        logger.LogError("Backend service in critical state");
+                        return false;
+                    }
+
+                    return true;
+                });
+        }
+
+        private async Task<Uri> GetServiceUri(string serviceName, ConsulClient client, ILogger logger)
+        {
+            var catalogResult = await client.Catalog.Service(serviceName);
+
+            return ProcessQueryResult(
+                catalogResult,
+                logger,
+                agentService =>
+                {
+                    var backendPort = agentService.ServicePort.ToString();
+                    var backendHost = agentService.ServiceAddress;
+                    logger.LogInformation($"Found host {backendHost} and port {backendPort} for backend");
+
+                    if (backendHost == Environment.MachineName) backendHost = "localhost";
+
+                    return new Uri($"http://{backendHost}:{backendPort}"); ;
+                });
+        }
+
+        private TRes ProcessQueryResult<T, TRes>(
+            QueryResult<T[]> consulQueryResult,
+            ILogger logger,
+            Func<T, TRes> processResult)
+        {
+            if (consulQueryResult.StatusCode == HttpStatusCode.OK)
+            {
+                var coreResult = consulQueryResult.Response.FirstOrDefault();
+                if (coreResult != null)
+                {
+                    return processResult(coreResult);
+                }
+                else
+                {
+                    logger.LogError("Service was not found");
+                    return default(TRes);
+                }
+            }
+            else
+            {
+                logger.LogError($"Failed to get OK response from Consul: {consulQueryResult.StatusCode.ToString()}");
+                return default(TRes);
+            }
+        }
+
+        private async Task<string> CallBackend(Uri serviceUri, ILogger logger)
+        {
+            using (var c = new System.Net.Http.HttpClient())
+            {
+                c.BaseAddress = serviceUri;
+
+                logger.LogInformation($"Calling backend at {c.BaseAddress}");
+
                 try
                 {
-                    string consulHost = Environment.GetEnvironmentVariable("CONSUL_HOST") ?? "localhost";
-                    logger.LogInformation($"Consul host is {consulHost}");
+                    var serviceResponse = await c.GetStringAsync(string.Empty);
 
-                    using (var c = new Consul.ConsulClient(cnfg => cnfg.Address = new Uri($"http://{consulHost}:8500")))
-                    {
-                        var healthResult = await c.Health.Service("backend");
-                        if (healthResult.StatusCode == System.Net.HttpStatusCode.OK)
-                        {
-                            var service = healthResult.Response.FirstOrDefault();
-                            if (service != null)
-                            {
-                                if (service.Checks.Any(chk => string.Compare(chk.Status, "critical", true) == 0))
-                                {
-                                    await WriteFailure(context, logger, "Backend service in critical state");
-                                    return;
-                                }
-                            }
-                            else
-                            {
-                                await WriteFailure(context, logger, "Backend service was not found in health checks");
-                                return;
-                            }
-                        }
-                        else
-                        {
-                            await WriteFailure(context, logger, $"Failed to get OK response from Consul health check: {healthResult.StatusCode.ToString()}");
-                            return;
-                        }
+                    logger.LogInformation($"Backend call completed with '{serviceResponse}'");
 
-                        var result = await c.Catalog.Service("backend");
-
-                        if (result.StatusCode == System.Net.HttpStatusCode.OK)
-                        {
-                            var agentService = result.Response.FirstOrDefault();
-                            if (agentService != null)
-                            {
-                                backendPort = agentService.ServicePort.ToString();
-                                backendHost = agentService.ServiceAddress;
-                                logger.LogInformation($"Found host {backendHost} and port {backendPort} for backend");
-                            }
-                            else
-                            {
-                                await WriteFailure(context, logger, "Backend service was not found");
-                                return;
-                            }
-                        }
-                        else
-                        {
-                            await WriteFailure(context, logger, $"Failed to get OK response from Consul: {result.StatusCode.ToString()}");
-                            return;
-                        }
-                    }
+                    return serviceResponse;
                 }
                 catch (Exception ex)
                 {
-                    await WriteFailure(context, logger, $"Failed to get host and port from Consul: {ex.ToString()}");
-                    return;
+                    logger.LogError($"Failed to call backend: {ex.ToString()}");
+                    return null;
                 }
-                
-                using (var c = new System.Net.Http.HttpClient())
-                {
-                    if (backendHost == Environment.MachineName) backendHost = "localhost";
-                    c.BaseAddress = new Uri($"http://{backendHost}:{backendPort}");
-
-                    logger.LogInformation($"Calling backend at {c.BaseAddress}");
-
-                    try
-                    {
-                        string serviceResponse = await c.GetStringAsync("");
-
-                        logger.LogInformation($"Backend call completed with '{serviceResponse}'");
-
-                        await context.Response.WriteAsync($"Hello {serviceResponse}!");
-                    }
-                    catch (Exception ex)
-                    {
-                        await WriteFailure(context, logger, $"Failed to call backend: {ex.ToString()}");
-                    }
-                }      
-            });
-        }
-
-        private async Task WriteFailure(HttpContext context, ILogger logger, string message)
-        {
-            logger.LogError(message);
-            context.Response.StatusCode = (int)System.Net.HttpStatusCode.InternalServerError;
-            await context.Response.WriteAsync(message);
+            }
         }
     }
 }
