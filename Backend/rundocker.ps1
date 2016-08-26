@@ -1,5 +1,11 @@
 $network = $args[0]
 
+if(!$network)
+{
+  echo "Network not specified"
+  return 1
+}
+
 $OldLoc = Get-Location
 Set-Location ($MyInvocation.MyCommand.Path | Split-Path)
 

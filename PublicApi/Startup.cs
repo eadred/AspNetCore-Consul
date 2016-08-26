@@ -43,6 +43,30 @@ namespace PublicApi
 
                     using (var c = new Consul.ConsulClient(cnfg => cnfg.Address = new Uri($"http://{consulHost}:8500")))
                     {
+                        var healthResult = await c.Health.Service("backend");
+                        if (healthResult.StatusCode == System.Net.HttpStatusCode.OK)
+                        {
+                            var service = healthResult.Response.FirstOrDefault();
+                            if (service != null)
+                            {
+                                if (service.Checks.Any(chk => string.Compare(chk.Status, "critical", true) == 0))
+                                {
+                                    await WriteFailure(context, logger, "Backend service in critical state");
+                                    return;
+                                }
+                            }
+                            else
+                            {
+                                await WriteFailure(context, logger, "Backend service was not found in health checks");
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            await WriteFailure(context, logger, $"Failed to get OK response from Consul health check: {healthResult.StatusCode.ToString()}");
+                            return;
+                        }
+
                         var result = await c.Catalog.Service("backend");
 
                         if (result.StatusCode == System.Net.HttpStatusCode.OK)
