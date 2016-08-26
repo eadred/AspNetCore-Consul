@@ -43,14 +43,22 @@ namespace PublicApi
 
                     using (var c = new Consul.ConsulClient(cnfg => cnfg.Address = new Uri($"http://{consulHost}:8500")))
                     {
-                        var result = await c.Agent.Services();
+                        var result = await c.Catalog.Service("backend");
 
                         if (result.StatusCode == System.Net.HttpStatusCode.OK)
                         {
-                            var agentService = result.Response["backend"];
-                            backendPort = agentService.Port.ToString();
-                            backendHost = agentService.Address;
-                            logger.LogInformation($"Found host {backendHost} and port {backendPort} for backend");
+                            var agentService = result.Response.FirstOrDefault();
+                            if (agentService != null)
+                            {
+                                backendPort = agentService.ServicePort.ToString();
+                                backendHost = agentService.ServiceAddress;
+                                logger.LogInformation($"Found host {backendHost} and port {backendPort} for backend");
+                            }
+                            else
+                            {
+                                await WriteFailure(context, logger, "Backend service was not found");
+                                return;
+                            }
                         }
                         else
                         {
