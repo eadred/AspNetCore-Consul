@@ -70,14 +70,25 @@ namespace Backend
 
                 //Get the first IPv4 address
                 var addrs = await Dns.GetHostAddressesAsync(Dns.GetHostName());
-                string containerIp = addrs.Where(addr => addr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork).First().ToString();
-                logger.LogInformation($"Host IP is {containerIp}");
+
+                var uniqueAddrs = addrs.Where(addr => addr.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork).Select(a => a.ToString()).Distinct().ToArray();
+                logger.LogInformation($"Unique IPv4 addresses: {string.Join(",", uniqueAddrs)}");
+
+                //Determine the IP address that this service advertises itself on
+                //This is the first IP address which will be the overlay network if using that, otherwise it will be the bridge network
+                string serviceIp = uniqueAddrs[0];
+                logger.LogInformation($"Container IP for service registration is {serviceIp}");
+
+                //Determine the IP address that Consul should call back to for health checks
+                // This should be the bridge network, which will be the second entry if using an overlay network
+                string healthCallbackIp = uniqueAddrs.Length > 1 ? uniqueAddrs[1] : uniqueAddrs[0];
+                logger.LogInformation($"Container IP for health check is {healthCallbackIp}");
 
                 var addresses = app.ServerFeatures.Get<IServerAddressesFeature>();
                 var serviceUri = new Uri(addresses.Addresses.Single());
                 logger.LogInformation($"Service URI is {serviceUri.ToString()}");
 
-                var checkAddress = $"{serviceUri.Scheme}://{containerIp}:{serviceUri.Port.ToString()}{HealthPath}";
+                var checkAddress = $"{serviceUri.Scheme}://{healthCallbackIp}:{serviceUri.Port.ToString()}{HealthPath}";
                 logger.LogInformation($"Health check address is {checkAddress}");
 
                 string consulHost = Environment.GetEnvironmentVariable("CONSUL_HOST") ?? "localhost";
@@ -90,7 +101,7 @@ namespace Backend
                         {
                             Name = "backend",
                             Port = serviceUri.Port,
-                            Address = containerIp,
+                            Address = serviceIp,
                             Check = new Consul.AgentServiceCheck
                             {
                                 HTTP = checkAddress,
